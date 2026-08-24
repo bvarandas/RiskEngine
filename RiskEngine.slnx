@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/docs/">
+    <File Path="oms.md" />
+  </Folder>
+  <Folder Name="/oms/">
+    <Project Path="oms/FixSessionManager/3-FixSessionManager.csproj" Id="0484b2f5-b85a-421e-a1cf-cdb381b7a671" />
+    <Project Path="oms/OrderIngestion/1-OrderIngestion.csproj" Id="04a6ff53-fe92-46ae-a39b-6c0a2c959bcb" />
+    <Project Path="oms/RiskEngine/2-PreTradeRisk.csproj" />
+  </Folder>
+  <Project Path="oms/ServiceDefaults/ServiceDefaults.csproj" Id="3d38ce51-6575-4389-b5a6-9ee8e0523162" />
+</Solution>
