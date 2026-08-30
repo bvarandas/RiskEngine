@@ -133,7 +133,7 @@ public sealed class PreTradeRiskEngine : IDisposable
         if (order.Side == 2)
         {
             // Resolução O(1) do ponteiro de custódia do ativo para este cliente específico
-            ref PositionState position = ref _riskState.GetPosition(order.AccountId, order.Symbol);
+            ref PositionState position = ref _riskState.GetPosition(order.AccountId, order.SymbolId);
 
             // Quantidade disponível = Custódia total - Ordens de venda já enviadas que aguardam execução
             int availableQuantity = position.TotalQuantity - position.BlockedQuantity;

@@ -5,7 +5,7 @@ using System.Runtime.InteropServices;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
-namespace RiskEngine.Recovery;
+namespace sync;
 
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
 public struct AccountState

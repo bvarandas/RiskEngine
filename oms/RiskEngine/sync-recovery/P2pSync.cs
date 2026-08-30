@@ -7,7 +7,7 @@ using System.Runtime.InteropServices;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
-namespace RiskEngine.P2PSync;
+namespace sync;
 
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
 public struct AccountBalanceChunk

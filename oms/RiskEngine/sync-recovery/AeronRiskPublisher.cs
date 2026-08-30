@@ -6,7 +6,7 @@ using System.Reflection.PortableExecutable;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
-namespace RiskEngine.AeronTransport;
+namespace sync;
 
 /// <summary>
 /// Publicador de Mutação na Instância Ativa via Aeron

@@ -3,7 +3,7 @@ using System.Runtime.CompilerServices;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
-namespace RiskEngine.Ha;
+namespace sync;
 
 public enum NodeRole
 {

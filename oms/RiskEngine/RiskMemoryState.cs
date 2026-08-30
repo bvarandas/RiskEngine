@@ -11,7 +11,7 @@ public unsafe sealed class RiskMemoryState
     // Indexação aritmética pura O(1)
     private readonly PositionState* _positions;
     private const long MaxAccounts = 1_000_000;
-    private const int MaxSymbols = 1024; // Suporta até 1024 ativos ativos no OMS
+    private const int MaxSymbols = 1024; // Suporta até 1024 ativos ativos no OMS(Cada cliente pode ter posições em até 1024 ativos diferentes)
 
     public RiskMemoryState()
     {
@@ -19,6 +19,12 @@ public unsafe sealed class RiskMemoryState
         _accounts = (AccountRiskState*)NativeMemory.Alloc((nuint)(MaxAccounts * sizeof(AccountRiskState)));
 
         _positions = (PositionState*)NativeMemory.AllocZeroed((nuint)((long)MaxAccounts * MaxSymbols * sizeof(PositionState)));
+
+        if (_accounts == null || _positions == null)
+        {
+            Cleanup();
+            throw new OutOfMemoryException("Falha ao alocar memória nativa para o motor de risco.");
+        }
     }
 
     // O AccountId serve como índice direto (O(1) absoluto sem overhead de hash)
@@ -35,4 +41,12 @@ public unsafe sealed class RiskMemoryState
         long offset = (accountId * MaxSymbols) + symbolId;
         return ref _positions[offset];
     }
+
+    private void Cleanup()
+    {
+        if (_accounts != null) NativeMemory.Free(_accounts);
+        if (_positions != null) NativeMemory.Free(_positions);
+    }
+
+    ~RiskMemoryState() => Cleanup();
 }
