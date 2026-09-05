@@ -12,7 +12,7 @@ public  struct OrderEvent
 {
     [FieldOffset(0)] public long OrderId;
     [FieldOffset(8)] public long AccountId;
-    [FieldOffset(16)] public double Price;
+    [FieldOffset(16)] public decimal Price;
     [FieldOffset(24)] public int Quantity;
     [FieldOffset(28)] public byte Side; // 1 = Buy, 2 = Sell
     [FieldOffset(32)] public byte OrderType; // 1 = Market, 2 = Limit

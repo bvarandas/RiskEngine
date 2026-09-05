@@ -7,7 +7,7 @@ using System.Threading;
 
 namespace ServiceDefaults;
 
-public sealed class FastRingBuffer : IRingBuffer
+public sealed class FastRingBuffer : IFastRingBuffer
 {
     private const int BufferSize = 1024 * 64; // Deve ser potência de 2 (65536)
     private const int Mask = BufferSize - 1;

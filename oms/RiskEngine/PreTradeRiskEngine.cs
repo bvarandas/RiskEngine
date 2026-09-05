@@ -1,4 +1,5 @@
-﻿using ServiceDefaults;
+﻿using FixSessionManager;
+using ServiceDefaults;
 using ServiceDefaults.events;
 using ServiceDefaults.interfaces;
 using System;
@@ -12,6 +13,10 @@ namespace PreTradeRisk;
 
 public sealed class PreTradeRiskEngine : IDisposable
 {
+    private readonly B3FixFastSender _fixSender;
+    private readonly byte[] _senderCompIdBytes;
+    private readonly byte[] _targetCompIdBytes;
+
     private readonly IRingBuffer _ringBuffer;
     private readonly RiskMemoryState _riskState;
     private readonly int _cpuCoreId;
@@ -25,8 +30,9 @@ public sealed class PreTradeRiskEngine : IDisposable
     private Thread? _workerThread;
     private volatile bool _isRunning;
 
-    public PreTradeRiskEngine(IRingBuffer ringBuffer, RiskMemoryState riskState, int cpuCoreId)
+    public PreTradeRiskEngine(IRingBuffer ringBuffer, RiskMemoryState riskState, int cpuCoreId, B3FixFastSender fixSender)
     {
+        _fixSender = fixSender;
         _ringBuffer = ringBuffer;
         _riskState = riskState;
         _cpuCoreId = cpuCoreId;
@@ -54,6 +60,10 @@ public sealed class PreTradeRiskEngine : IDisposable
 
         long nextSequenceToProcess = _consumerSequence.Value + 1;
 
+        // Cache local dos spans de identificação FIX para evitar overhead em cada iteração
+        ReadOnlySpan<byte> senderCompId = _senderCompIdBytes;
+        ReadOnlySpan<byte> targetCompId = _targetCompIdBytes;
+
         while (_isRunning)
         {
             // O Consumidor pergunta: "A Ingestão já publicou a sequência que eu quero ler?"
@@ -73,6 +83,18 @@ public sealed class PreTradeRiskEngine : IDisposable
                     {
                         // TODO: Roteia para o FIX Session Manager (Sessão Puma)
                         // _fixOutbound.Send(ref orderToValidate);
+                        // Roteia diretamente para o B3FixFastSender sem alocações no Heap
+                        // Convertemos o OrderEvent da struct para o valor aceito pelo Sender
+                        FixOrder fixOrder = new FixOrder(
+                            ClOrdID: orderToValidate.ClOrdID,
+                            Symbol: orderToValidate.SymbolBuffer, // Presume ReadOnlyMemory<byte> ou Memory<byte> no OrderEvent
+                            Side: orderToValidate.Side,            // byte ASCII ('1' ou '2')
+                            Quantity: orderToValidate.Quantity,
+                            Price: orderToValidate.Price
+                        );
+
+                        // Envio síncrono direto ao soquete TCP
+                        _fixSender.SendNewOrderSingle(in fixOrder, senderCompId, targetCompId);
                     }
                     else
                     {
@@ -113,8 +135,8 @@ public sealed class PreTradeRiskEngine : IDisposable
 
         if (order.Side == 1) // 1 = Buy
         {
-            double orderValue = order.Price * order.Quantity;
-            double availableCash = account.AvailableCash - account.BlockedCash;
+            decimal orderValue = order.Price * order.Quantity;
+            decimal availableCash = account.AvailableCash - account.BlockedCash;
 
             if (availableCash < orderValue)
             {
