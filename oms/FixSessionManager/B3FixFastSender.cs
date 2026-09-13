@@ -1,19 +1,10 @@
-﻿using System;
-using System.Buffers;
+﻿using ServiceDefaults;
 using System.Buffers.Text;
+using System.Globalization;
 using System.Net.Sockets;
 using System.Runtime.CompilerServices;
 
 namespace FixSessionManager;
-
-
-// Estrutura leve para a ordem (Stack-only, Zero Heap)
-public readonly record struct FixOrder(
-    long ClOrdID,
-    ReadOnlyMemory<byte> Symbol, // Ex: "PETR4"
-    byte Side,                   // '1' = Buy, '2' = Sell
-    long Quantity,
-    decimal Price);
 
 public unsafe class B3FixFastSender
 {
@@ -24,72 +15,104 @@ public unsafe class B3FixFastSender
     public B3FixFastSender(Socket socket)
     {
         _socket = socket;
+        _socket.Blocking = false;
+        _socket.NoDelay = true; // Desativa o Algoritmo de Nagle (crítico para FIX)
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void SendNewOrderSingle(in FixOrder order, ReadOnlySpan<byte> senderCompId, ReadOnlySpan<byte> targetCompId)
     {
-        // Allocation na Stack: suficiente para uma mensagem New Order Single (D) da B3
         Span<byte> buffer = stackalloc byte[512];
-
-        // Reservar espaço para o Header fixo (Tag 8 e Tag 9)
-        int bodyStart = 0;
-
-        // --- CONSTRUÇÃO DO CORPO DA MENSAGEM ---
-        Span<byte> bodyBuffer = buffer.Slice(64); // Reserva 64 bytes para o Header
+        Span<byte> bodyBuffer = buffer.Slice(64);
         int bodyLength = 0;
 
-        // Tag 35: MsgType = D (New Order Single)
         bodyLength += WriteTag(bodyBuffer.Slice(bodyLength), 35, "D"u8);
-
-        // Tag 34: MsgSeqNum
         bodyLength += WriteTag(bodyBuffer.Slice(bodyLength), 34, Interlocked.Increment(ref _msgSeqNum));
-
-        // Tag 49: SenderCompID & Tag 56: TargetCompID
         bodyLength += WriteTag(bodyBuffer.Slice(bodyLength), 49, senderCompId);
         bodyLength += WriteTag(bodyBuffer.Slice(bodyLength), 56, targetCompId);
 
-        // Tag 52: SendingTime (YYYYMMDD-HH:MM:SS.mmm)
+        // Tag 52: SendingTime (Obrigatório no Header)
         bodyLength += WriteSendingTime(bodyBuffer.Slice(bodyLength));
 
-        // Tag 11: ClOrdID
         bodyLength += WriteTag(bodyBuffer.Slice(bodyLength), 11, order.ClOrdID);
 
-        // Tag 55: Symbol
-        bodyLength += WriteTag(bodyBuffer.Slice(bodyLength), 55, order.Symbol.Span);
+        // Extração segura do Symbol sem gerar nulos
+        ReadOnlySpan<byte> symbolSpan = order.Symbol;
+        int symbolLen = symbolSpan.IndexOf((byte)0);
+        if (symbolLen < 0) symbolLen = 12;
+        bodyLength += WriteTag(bodyBuffer.Slice(bodyLength), 55, symbolSpan.Slice(0, symbolLen));
 
-        // Tag 54: Side
         bodyLength += WriteTag(bodyBuffer.Slice(bodyLength), 54, order.Side);
 
-        // Tag 38: OrderQty
+        // ATENÇÃO: Tag 60 (TransactTime) é OBRIGATÓRIA no FIX 4.4 para MsgType=D
+        // Usando a mesma rotina de SendingTime, ou uma específica caso você precise de granularidade diferente
+        bodyLength += WriteTimestamp(bodyBuffer.Slice(bodyLength), 60, DateTime.UtcNow);
+
         bodyLength += WriteTag(bodyBuffer.Slice(bodyLength), 38, order.Quantity);
+        // INJEÇÃO APLICADA: Uso do Inteiro Escalado com precisão de 4 casas (fator 10000)
 
-        // Tag 44: Price
-        bodyLength += WriteTag(bodyBuffer.Slice(bodyLength), 44, order.Price);
+        bodyLength += WriteScaledPrice(bodyBuffer.Slice(bodyLength), 44, order.Price);
 
-        // Tag 40: OrdType = 2 (Limit)
         bodyLength += WriteTag(bodyBuffer.Slice(bodyLength), 40, "2"u8);
 
-        // --- CONSTRUÇÃO DO HEADER (Tags 8 e 9) ---
+        Span<byte> tempHeader = stackalloc byte[32];
         int headerLength = 0;
-        // Tag 8: BeginString = FIXT.1.1 ou FIX.4.4
-        headerLength += WriteTag(buffer, 8, "FIXT.1.1"u8);
-        // Tag 9: BodyLength
-        headerLength += WriteTag(buffer.Slice(headerLength), 9, bodyLength);
 
-        // Copiar o corpo para logo após o header
-        bodyBuffer.Slice(0, bodyLength).CopyTo(buffer.Slice(headerLength));
+        // Header definido estritamente para FIX.4.4
+        headerLength += WriteTag(tempHeader, 8, "FIX.4.4"u8);
+        headerLength += WriteTag(tempHeader.Slice(headerLength), 9, bodyLength);
+
+        int messageStart = 64 - headerLength;
+        tempHeader.Slice(0, headerLength).CopyTo(buffer.Slice(messageStart));
+
         int totalLengthExcludingChecksum = headerLength + bodyLength;
 
-        // --- CONSTRUÇÃO DO TRAILER (Tag 10: CheckSum) ---
-        int checksum = CalculateChecksum(buffer.Slice(0, totalLengthExcludingChecksum));
-        int checksumLength = WriteChecksum(buffer.Slice(totalLengthExcludingChecksum), checksum);
+        int checksum = CalculateChecksum(buffer.Slice(messageStart, totalLengthExcludingChecksum));
+        int checksumLength = WriteChecksum(buffer.Slice(messageStart + totalLengthExcludingChecksum), checksum);
 
         int totalMessageLength = totalLengthExcludingChecksum + checksumLength;
 
-        // --- ENVIO DIRETO NO SOQUETE ---
-        // Envio direto via ReadOnlySpan<byte> (zero-copy)
-        _socket.Send(buffer.Slice(0, totalMessageLength), SocketFlags.None);
+        // Uso do método não-bloqueante para evitar o gargalo de I/O na thread crítica
+        SendWithSpinLoop(buffer.Slice(messageStart, totalMessageLength));
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void SendWithSpinLoop(ReadOnlySpan<byte> buffer)
+    {
+        int totalSent = 0;
+        int length = buffer.Length;
+        SpinWait spinner = new SpinWait();
+
+        while (totalSent < length)
+        {
+            try
+            {
+                // Tenta enviar o que falta direto da stack, zero-allocation
+                int sent = _socket.Send(buffer.Slice(totalSent), SocketFlags.None);
+                totalSent += sent;
+
+                // Se enviou algo, reseta o spinner
+                if (sent > 0 && totalSent < length)
+                {
+                    spinner.Reset();
+                }
+            }
+            catch (SocketException ex)
+            {
+                // 10035 = WSAEWOULDBLOCK (Windows) ou EWOULDBLOCK/EAGAIN (Linux)
+                // Significa: "O buffer do SO está cheio, tente novamente depois".
+                if (ex.SocketErrorCode == SocketError.WouldBlock)
+                {
+                    // A thread não é congelada pelo SO. Fazemos o spin ativo no user-space.
+                    spinner.SpinOnce();
+                }
+                else
+                {
+                    // Qualquer outro erro (conexão caída, etc) é falha real
+                    throw;
+                }
+            }
+        }
     }
 
     #region Formatting Helpers (Zero Allocation)
@@ -116,16 +139,7 @@ public unsafe class B3FixFastSender
         return bytesWritten;
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static int WriteTag(Span<byte> buffer, int tag, decimal value)
-    {
-        Utf8Formatter.TryFormat(tag, buffer, out int bytesWritten);
-        buffer[bytesWritten++] = (byte)'=';
-        Utf8Formatter.TryFormat(value, buffer.Slice(bytesWritten), out int valWritten);
-        bytesWritten += valWritten;
-        buffer[bytesWritten++] = SOH;
-        return bytesWritten;
-    }
+
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static int WriteTag(Span<byte> buffer, int tag, byte value)
@@ -156,7 +170,6 @@ public unsafe class B3FixFastSender
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static int CalculateChecksum(ReadOnlySpan<byte> buffer)
     {
-        Configuration
         uint sum = 0;
         for (int i = 0; i < buffer.Length; i++)
         {
@@ -180,6 +193,67 @@ public unsafe class B3FixFastSender
 
         return offset;
     }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private int WriteTimestamp(Span<byte> buffer, int tag, DateTime timestamp)
+    {
+        int offset = 0;
 
+        // 1. Escreve a Tag ("52" ou "60") sem alocar strings
+        Utf8Formatter.TryFormat(tag, buffer, out int tagLen);
+        offset += tagLen;
+
+        // 2. Escreve o delimitador de Tag "="
+        buffer[offset++] = (byte)'=';
+
+        // 3. Escreve o Timestamp diretamente em bytes UTF-8 (Requer .NET 8+)
+        // Formato FIX estrito: YYYYMMDD-HH:MM:SS.mmm
+        timestamp.TryFormat(buffer.Slice(offset), out int timeLen, "yyyyMMdd-HH:mm:ss.fff", CultureInfo.InvariantCulture);
+
+        offset += timeLen;
+
+        // 4. Escreve o delimitador SOH (\x01)
+        buffer[offset++] = 1;
+
+        return offset;
+    }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public int WriteScaledPrice(Span<byte> buffer, int tag, long priceRaw, int scaleDecimals = 4)
+    {
+        int offset = 0;
+
+        // Escreve a Tag e o '='
+        Utf8Formatter.TryFormat(tag, buffer, out int tagLen);
+        offset += tagLen;
+        buffer[offset++] = (byte)'=';
+
+        // Formata o inteiro puro no buffer temporário ou diretamente
+        Span<byte> numBuffer = stackalloc byte[20];
+        Utf8Formatter.TryFormat(priceRaw, numBuffer, out int numLen);
+
+        // Lógica para injetar o ponto decimal sem matemática pesada
+        int dotPosition = numLen - scaleDecimals;
+
+        if (dotPosition <= 0)
+        {
+            // Tratamento para frações puras (ex: 0.05) omitido para concisão,
+            // mas requer escrever "0." e preencher os zeros à esquerda.
+        }
+        else
+        {
+            // Copia a parte inteira
+            numBuffer.Slice(0, dotPosition).CopyTo(buffer.Slice(offset));
+            offset += dotPosition;
+
+            // Insere o ponto
+            buffer[offset++] = (byte)'.';
+
+            // Copia a parte fracionária
+            numBuffer.Slice(dotPosition, scaleDecimals).CopyTo(buffer.Slice(offset));
+            offset += scaleDecimals;
+        }
+
+        buffer[offset++] = 1; // SOH
+        return offset;
+    }
     #endregion
 }

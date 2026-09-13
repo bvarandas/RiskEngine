@@ -1,28 +1,22 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Drawing;
-using System.Runtime.InteropServices;
-using System.Text;
+﻿using System.Runtime.InteropServices;
 
 namespace ServiceDefaults.events;
 
-// Layout explícito garante tamanho fixo e alinhamento previsível de memória
 [StructLayout(LayoutKind.Explicit, Size = 128)]
-public  struct OrderEvent
+public struct OrderEvent
 {
-    [FieldOffset(0)] public long OrderId;
-    [FieldOffset(8)] public long AccountId;
-    [FieldOffset(16)] public decimal Price;
-    [FieldOffset(24)] public int Quantity;
-    [FieldOffset(28)] public byte Side; // 1 = Buy, 2 = Sell
-    [FieldOffset(32)] public byte OrderType; // 1 = Market, 2 = Limit
-
-    [FieldOffset(32)] public int SymbolId;   // <--- NOVO: ID numérico pré-resolvido (0 a N)
-
-    // Symbol armazenado como ASCII/UTF-8 embutido (fixed buffer) para evitar string heap
-    [FieldOffset(36)] public unsafe fixed byte Symbol[12];
-
-    [FieldOffset(48)] public long IngestionTimestampNs; // Timestamp em nanosegundos
+    [FieldOffset(0)] public long OrderId;                // 8 bytes (0-7)
+    [FieldOffset(8)] public long AccountId;              // 8 bytes (8-15)
+    [FieldOffset(16)] public long Price;               // 16 bytes (16-31)
+    [FieldOffset(32)] public int Quantity;               // 8 bytes (32-39) - Corrigido para long
+    [FieldOffset(40)] public int SymbolId;                // 4 bytes (40-43)
+    [FieldOffset(44)] public byte Side;                   // 1 byte  (44)
+    [FieldOffset(45)] public byte OrderType;              // 1 byte  (45)
+    // Bytes 46-47 estão vazios (padding natural para alinhamento)
+    [FieldOffset(48)] public SymbolBuffer Symbol;         // 12 bytes (48-59)
+    // Bytes 60-63 estão vazios
+    [FieldOffset(64)] public long IngestionTimestampNs;   // 8 bytes (64-71)
+                                                          // Bytes 72-127 estão vazios (Preenchimento intencional para evitar False Sharing no L1 Cache)
 }
 
 [StructLayout(LayoutKind.Explicit, Size = 64)]

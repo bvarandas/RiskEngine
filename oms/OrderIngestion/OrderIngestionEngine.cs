@@ -57,7 +57,7 @@ public sealed class OrderIngestionEngine : IDisposable
         SetCpuAffinity(_cpuCoreId);
 
         // 2. Alocação de buffer não gerenciado (Fora do GC)
-        IntPtr nativeBufferPointer = (IntPtr) NativeMemory.Alloc(ReceiveBufferSize);
+        IntPtr nativeBufferPointer = (IntPtr)NativeMemory.Alloc(ReceiveBufferSize);
 
         try
         {
@@ -133,7 +133,7 @@ public sealed class OrderIngestionEngine : IDisposable
 
             // E. Libera a mensagem para os consumidores do Ring Buffer (Risk Engine / Engine Hot Path)
             _ringBuffer.Publish(seq);
-            
+
             offset += messageSize;
         }
     }
@@ -144,19 +144,16 @@ public sealed class OrderIngestionEngine : IDisposable
         // Exemplo de extração de protocolo binário via MemoryMarshal/Unsafe (sem alocações)
         target.OrderId = MemoryMarshal.Read<long>(source.Slice(0, 8));
         target.AccountId = MemoryMarshal.Read<long>(source.Slice(8, 8));
-        target.Price = MemoryMarshal.Read<double>(source.Slice(16, 8));
+        target.Price = MemoryMarshal.Read<long>(source.Slice(16, 8));
         target.Quantity = MemoryMarshal.Read<int>(source.Slice(24, 4));
         target.Side = source[28];
         target.OrderType = source[29];
 
-        // Copia o Symbol (16 bytes UTF8/ASCII) diretamente para o ponteiro fixo da struct
-        fixed (byte* symbolPtr = target.Symbol)
-        {
-            ReadOnlySpan<byte> symbolBytes = source.Slice(30, 16);
-            SymbolKey16 key = new SymbolKey16(symbolBytes);
-            target.SymbolId = _symbolMapper.GetSymbolId(key);
-            symbolBytes.CopyTo(new Span<byte>(symbolPtr, 16));
-        }
+        ReadOnlySpan<byte> symbolBytes = source.Slice(30, 16);
+        target.SymbolId = _symbolMapper.GetSymbolId(new SymbolKey16(symbolBytes));
+
+        // Agora a cópia é integral (16 bytes para 16 bytes), sem truncamentos perigosos
+        symbolBytes.CopyTo(target.Symbol);
     }
 
     private void SetupSocket()

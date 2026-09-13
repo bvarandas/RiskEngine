@@ -1,8 +1,5 @@
 ﻿using ServiceDefaults.events;
-using System;
-using System.Collections.Generic;
 using System.Runtime.CompilerServices;
-using System.Text;
 
 namespace ServiceDefaults;
 
@@ -35,7 +32,7 @@ public static class FastFixParser
                     order.OrderId = ParseLongFast(valueSpan);
                     break;
                 case 44: // Price
-                    order.Price = ParseDoubleFast(valueSpan);
+                    order.Price = ParseLongFast(valueSpan);
                     break;
                 case 38: // Quantity
                     order.Quantity = ParseIntFast(valueSpan);
@@ -43,15 +40,15 @@ public static class FastFixParser
                 case 54: // Side (1=Buy, 2=Sell)
                     order.Side = (byte)(valueSpan[0] - '0');
                     break;
-                case 55: // Symbol
-                    unsafe
+                case 55: // Symbol - Zero alocação e zero uso de "unsafe"
+                    Span<byte> symbolTarget = order.Symbol;
+                    int copyLength = Math.Min(valueSpan.Length, 16);
+                    valueSpan.Slice(0, copyLength).CopyTo(symbolTarget);
+
+                    // Zera ativamente o resto do buffer para limpar lixo de memória
+                    if (copyLength < 16)
                     {
-                        fixed (byte* pSymbol = order.Symbol)
-                        {
-                            int copyLength = Math.Min(valueSpan.Length, 11);
-                            valueSpan.Slice(0, copyLength).CopyTo(new Span<byte>(pSymbol, copyLength));
-                            pSymbol[copyLength] = 0; // Null terminator
-                        }
+                        symbolTarget.Slice(copyLength).Clear();
                     }
                     break;
             }
@@ -80,13 +77,5 @@ public static class FastFixParser
             result = result * 10 + (span[i] - '0');
         }
         return result;
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static double ParseDoubleFast(ReadOnlySpan<byte> span)
-    {
-        // Versão rápida sem boxing/allocations do Double.Parse
-        System.Buffers.Text.Utf8Parser.TryParse(span, out double value, out _);
-        return value;
     }
 }

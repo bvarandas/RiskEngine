@@ -2,14 +2,10 @@
 using ServiceDefaults;
 using ServiceDefaults.events;
 using ServiceDefaults.interfaces;
-using System;
-using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-using System.Text;
 
 namespace PreTradeRisk;
-
 
 public sealed class PreTradeRiskEngine : IDisposable
 {
@@ -86,11 +82,11 @@ public sealed class PreTradeRiskEngine : IDisposable
                         // Roteia diretamente para o B3FixFastSender sem alocações no Heap
                         // Convertemos o OrderEvent da struct para o valor aceito pelo Sender
                         FixOrder fixOrder = new FixOrder(
-                            ClOrdID: orderToValidate.ClOrdID,
-                            Symbol: orderToValidate.SymbolBuffer, // Presume ReadOnlyMemory<byte> ou Memory<byte> no OrderEvent
-                            Side: orderToValidate.Side,            // byte ASCII ('1' ou '2')
-                            Quantity: orderToValidate.Quantity,
-                            Price: orderToValidate.Price
+                            clOrdID: orderToValidate.OrderId,
+                            symbolSpan: orderToValidate.Symbol, // Presume ReadOnlyMemory<byte> ou Memory<byte> no OrderEvent
+                            side: orderToValidate.Side,            // byte ASCII ('1' ou '2')
+                            quantity: orderToValidate.Quantity,
+                            price: orderToValidate.Price
                         );
 
                         // Envio síncrono direto ao soquete TCP
@@ -135,8 +131,8 @@ public sealed class PreTradeRiskEngine : IDisposable
 
         if (order.Side == 1) // 1 = Buy
         {
-            decimal orderValue = order.Price * order.Quantity;
-            decimal availableCash = account.AvailableCash - account.BlockedCash;
+            long orderValue = order.Price * order.Quantity;
+            long availableCash = account.AvailableCash - account.BlockedCash;
 
             if (availableCash < orderValue)
             {
