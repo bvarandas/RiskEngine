@@ -97,36 +97,39 @@ public unsafe class B3FixFastSender
     {
         int totalSent = 0;
         int length = buffer.Length;
-        SpinWait spinner = new SpinWait();
+        int spinCount = 0;
 
         while (totalSent < length)
         {
-            try
-            {
-                // Tenta enviar o que falta direto da stack, zero-allocation
-                int sent = _socket.Send(buffer.Slice(totalSent), SocketFlags.None);
-                totalSent += sent;
+            // Usa a sobrecarga que NÃO lança exceções. Retorna o erro no parâmetro 'out'.
+            int sent = _socket.Send(buffer.Slice(totalSent), SocketFlags.None, out SocketError errorCode);
 
-                // Se enviou algo, reseta o spinner
-                if (sent > 0 && totalSent < length)
-                {
-                    spinner.Reset();
-                }
-            }
-            catch (SocketException ex)
+            if (errorCode == SocketError.Success)
             {
-                // 10035 = WSAEWOULDBLOCK (Windows) ou EWOULDBLOCK/EAGAIN (Linux)
-                // Significa: "O buffer do SO está cheio, tente novamente depois".
-                if (ex.SocketErrorCode == SocketError.WouldBlock)
+                totalSent += sent;
+                spinCount = 0; // Reseta o contador ao progredir
+            }
+            else if (errorCode == SocketError.WouldBlock)
+            {
+                // O buffer do SO está cheio.
+                // Executamos o spin ativo puramente na CPU (sem yield implícito do SpinWait)
+                // Limitamos a 1000 ciclos (~alguns microssegundos) antes de forçar o yield,
+                // para evitar o travamento total do núcleo caso a conexão congele.
+                if (spinCount < 1000)
                 {
-                    // A thread não é congelada pelo SO. Fazemos o spin ativo no user-space.
-                    spinner.SpinOnce();
+                    Thread.SpinWait(1); // Instrução 'pause' nativa na CPU, muito mais leve que SpinWait struct
+                    spinCount++;
                 }
                 else
                 {
-                    // Qualquer outro erro (conexão caída, etc) é falha real
-                    throw;
+                    Thread.Yield(); // Rede severamente estrangulada. Cede para evitar dead-lock térmico.
+                    spinCount = 0;
                 }
+            }
+            else
+            {
+                // Uma falha real (ex: conexão perdida). Aqui sim, é justificável alocar erro.
+                throw new SocketException((int)errorCode);
             }
         }
     }

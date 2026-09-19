@@ -126,7 +126,7 @@ public sealed class PreTradeRiskEngine : IDisposable
                                 destinationSizeInBytes: 20,
                                 sourceBytesToCopy: 20);
                             }
-
+                            /// HACK: Copiando o SymbolBuffer diretamente.
                             // Nota: Como não tenho a implementação do seu 'SymbolBuffer', 
                             // a cópia do ativo dependerá da estrutura interna dele.
                         }
