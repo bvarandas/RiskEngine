@@ -191,14 +191,19 @@ public sealed class OrderIngestionEngine : IDisposable
     {
         try
         {
-            return socket.Receive(buffer, SocketFlags.None, out SocketError errorCode);
+            int bytesReceived = socket.Receive(buffer, SocketFlags.None, out SocketError errorCode);
 
             if (errorCode == SocketError.WouldBlock)
-                return -1; // Sem dados no momento
+                return -1; // Busy spin continuará
+
+            if (errorCode != SocketError.Success)
+                return 0; // Erro de socket, forçar desconexão
+
+            return bytesReceived;
         }
         catch
         {
-            return 0; // Conexão com erro/fechada
+            return 0; // Exceção, forçar desconexão
         }
     }
 

@@ -25,8 +25,11 @@ public sealed class PreTradeRiskEngine : IDisposable
 
     private Thread? _workerThread;
     private volatile bool _isRunning;
+    private readonly OutboundRejectRingBuffer _rejectBuffer;
 
-    public PreTradeRiskEngine(IRingBuffer ringBuffer, RiskMemoryState riskState, int cpuCoreId, B3FixFastSender fixSender)
+
+
+    public PreTradeRiskEngine(IRingBuffer ringBuffer, RiskMemoryState riskState, int cpuCoreId, B3FixFastSender fixSender, OutboundRejectRingBuffer rejectBuffer)
     {
         _fixSender = fixSender;
         _ringBuffer = ringBuffer;
@@ -34,6 +37,7 @@ public sealed class PreTradeRiskEngine : IDisposable
         _cpuCoreId = cpuCoreId;
         _consumerSequence.Value = -1L;
         _producerSequenceReference.Value = -1L;
+        _rejectBuffer = rejectBuffer;
     }
 
     public void Start()
@@ -77,25 +81,57 @@ public sealed class PreTradeRiskEngine : IDisposable
 
                     if (passed)
                     {
-                        // TODO: Roteia para o FIX Session Manager (Sessão Puma)
-                        // _fixOutbound.Send(ref orderToValidate);
-                        // Roteia diretamente para o B3FixFastSender sem alocações no Heap
-                        // Convertemos o OrderEvent da struct para o valor aceito pelo Sender
-                        FixOrder fixOrder = new FixOrder(
-                            clOrdID: orderToValidate.OrderId,
-                            symbolSpan: orderToValidate.Symbol, // Presume ReadOnlyMemory<byte> ou Memory<byte> no OrderEvent
-                            side: orderToValidate.Side,            // byte ASCII ('1' ou '2')
-                            quantity: orderToValidate.Quantity,
-                            price: orderToValidate.Price
-                        );
+                        unsafe
+                        {
+                            // Ancora o ponteiro de origem
+                            fixed (byte* pClOrdId = orderToValidate.ClOrdId)
+                            {
+                                // Alocação stack-only (Heap = 0)
+                                FixOrder fixOrder = new FixOrder(
+                                    sourceClOrdId: pClOrdId,
+                                    accountId: orderToValidate.AccountId,
+                                    price: orderToValidate.Price,
+                                    quantity: orderToValidate.Quantity,
+                                    side: orderToValidate.Side,
+                                    orderType: orderToValidate.OrderType,
+                                    timeInForce: orderToValidate.TimeInForce,
+                                    // Dependendo do seu FIX Engine, você pode precisar converter Ns para Ticks ou Epoch Ns
+                                    transactTime: orderToValidate.IngestionTimestampNs,
+                                    symbolSpan: orderToValidate.Symbol // Assumindo que você tem este método
+                                );
 
-                        // Envio síncrono direto ao soquete TCP
-                        _fixSender.SendNewOrderSingle(in fixOrder, senderCompId, targetCompId);
+                                _fixSender.SendNewOrderSingle(in fixOrder, senderCompId, targetCompId);
+                            }
+                        }
                     }
                     else
                     {
-                        // TODO: Roteia um Reject (Execution Report 8=8) de volta para o cliente no DropCopy
-                        // _dropCopy.SendReject(ref orderToValidate, "Risco: Limite excedido");
+                        // ... dentro do Else de rejeição
+                        ref RejectEvent rejectEvent = ref _rejectBuffer.Claim(out long sequence);
+
+                        rejectEvent.OrderId = orderToValidate.OrderId;
+                        rejectEvent.Side = orderToValidate.Side;
+                        rejectEvent.ReasonCode = 1;
+
+                        unsafe
+                        {
+                            // O bloco 'fixed' ancora os endereços na memória, impedindo o GC 
+                            // de mover os arrays subjacentes durante a cópia dos bytes.
+                            fixed (byte* pSrcClOrdId = orderToValidate.ClOrdId)
+                            fixed (byte* pDestClOrdId = rejectEvent.ClOrdId)
+                            {
+                                Buffer.MemoryCopy(
+                                source: pSrcClOrdId,
+                                destination: pDestClOrdId,
+                                destinationSizeInBytes: 20,
+                                sourceBytesToCopy: 20);
+                            }
+
+                            // Nota: Como não tenho a implementação do seu 'SymbolBuffer', 
+                            // a cópia do ativo dependerá da estrutura interna dele.
+                        }
+
+                        _rejectBuffer.Commit(sequence);
                     }
 
                     nextSequenceToProcess++;
@@ -154,7 +190,7 @@ public sealed class PreTradeRiskEngine : IDisposable
             ref PositionState position = ref _riskState.GetPosition(order.AccountId, order.SymbolId);
 
             // Quantidade disponível = Custódia total - Ordens de venda já enviadas que aguardam execução
-            int availableQuantity = position.TotalQuantity - position.BlockedQuantity;
+            long availableQuantity = position.TotalQuantity - position.BlockedQuantity;
 
             if (availableQuantity < order.Quantity)
             {

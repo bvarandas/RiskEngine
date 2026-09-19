@@ -2,34 +2,64 @@
 
 namespace ServiceDefaults;
 
-// Estrutura leve para a ordem (Stack-only, Zero Heap)
 [StructLayout(LayoutKind.Explicit, Size = 128)]
-public readonly struct FixOrder
+public unsafe struct FixOrder
 {
-    [FieldOffset(0)] public readonly long ClOrdID;       // Espelha OrderId
+    // Tag 11: ClOrdID (Alfanumérico, 20 bytes) - OBRIGATÓRIO SER STRING/BYTE ARRAY
+    [FieldOffset(0)] public fixed byte ClOrdID[20];
 
-    // Ignorando AccountId (offset 8), mas o espaço é preservado no layout.
+    // Tag 1: Account (Não ignore a menos que o Gateway injete)
+    [FieldOffset(24)] public long AccountId;
 
-    [FieldOffset(16)] public readonly long Price;      // Espelha Price
-    [FieldOffset(32)] public readonly int Quantity;      // Espelha Quantity
+    // Tag 44: Price (Preço com multiplicador implícito)
+    [FieldOffset(32)] public long Price;
 
-    // Ignorando SymbolId, mapeando Side para o mesmo local exato
-    [FieldOffset(44)] public readonly byte Side;          // Espelha Side
+    // Tag 38: OrderQty (Mandatório)
+    [FieldOffset(40)] public long Quantity;
 
-    // Substituindo ReadOnlyMemory<byte> (que é managed e destrói compatibilidade blittable)
-    // pelo buffer inline no offset exato.
-    [FieldOffset(48)] public readonly SymbolBuffer Symbol;
+    // Tag 60: TransactTime (Mandatório, enviado como nanosegundos ou ticks)
+    [FieldOffset(48)] public long TransactTime;
 
-    // Método utilitário para facilitar injeção do span original (Ex: "PETR4")
-    public FixOrder(long clOrdID, ReadOnlySpan<byte> symbolSpan, byte side, int quantity, long price)
+    // Tag 54: Side (1 = Buy, 2 = Sell) - Mandatório
+    [FieldOffset(56)] public byte Side;
+
+    // Tag 40: OrdType (1 = Market, 2 = Limit) - Mandatório
+    [FieldOffset(57)] public byte OrderType;
+
+    // Tag 59: TimeInForce (0 = Day, 3 = IOC, 4 = FOK)
+    [FieldOffset(58)] public byte TimeInForce;
+
+    // Tag 55: Symbol (Buffer inline) - Mandatório
+    [FieldOffset(64)] public SymbolBuffer Symbol;
+
+    public FixOrder(
+        byte* sourceClOrdId,
+        long accountId,
+        long price,
+        long quantity,
+        byte side,
+        byte orderType,
+        byte timeInForce,
+        long transactTime,
+        ReadOnlySpan<byte> symbolSpan)
     {
-        this = default; // Obrigatório para structs com Explicit layout zerarem memória residual
-        ClOrdID = clOrdID;
+        this = default;
+
+        AccountId = accountId;
         Price = price;
         Quantity = quantity;
         Side = side;
+        OrderType = orderType;
+        TimeInForce = timeInForce;
+        TransactTime = transactTime;
 
-        // Copia até 12 bytes do ReadOnlySpan para o InlineArray de forma eficiente
+        // Cópia SIMD do ClOrdId (20 bytes) preservando o identificador do cliente
+        fixed (byte* destClOrdId = ClOrdID)
+        {
+            Buffer.MemoryCopy(sourceClOrdId, destClOrdId, 20, 20);
+        }
+
+        // Assumindo que SymbolBuffer comporta implicitamente um Span<byte>
         int length = Math.Min(symbolSpan.Length, 12);
         symbolSpan.Slice(0, length).CopyTo(Symbol);
     }

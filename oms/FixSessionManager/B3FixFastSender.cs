@@ -34,7 +34,23 @@ public unsafe class B3FixFastSender
         // Tag 52: SendingTime (Obrigatório no Header)
         bodyLength += WriteSendingTime(bodyBuffer.Slice(bodyLength));
 
-        bodyLength += WriteTag(bodyBuffer.Slice(bodyLength), 11, order.ClOrdID);
+        unsafe
+        {
+            // 1. Ancora a struct na memória para impedir a ação do GC sobre este endereço
+            fixed (byte* pClOrdID = order.ClOrdID)
+            {
+                // 2. Transforma o ponteiro bruto em Span para análise O(1)
+                ReadOnlySpan<byte> rawIdSpan = new ReadOnlySpan<byte>(pClOrdID, 20);
+
+                // 3. Localiza o primeiro byte nulo para descobrir o tamanho real do ID
+                int realLength = rawIdSpan.IndexOf((byte)0);
+                if (realLength < 0) realLength = 20; // O ID ocupa todos os 20 bytes
+
+                // 4. Escreve a tag apenas com os bytes úteis
+                ReadOnlySpan<byte> validIdSpan = rawIdSpan.Slice(0, realLength);
+                bodyLength += WriteTag(bodyBuffer.Slice(bodyLength), 11, validIdSpan);
+            }
+        }
 
         // Extração segura do Symbol sem gerar nulos
         ReadOnlySpan<byte> symbolSpan = order.Symbol;
