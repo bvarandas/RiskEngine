@@ -13,7 +13,7 @@ public sealed class PreTradeRiskEngine : IDisposable
     private readonly byte[] _senderCompIdBytes;
     private readonly byte[] _targetCompIdBytes;
 
-    private readonly IRingBuffer _ringBuffer;
+    private readonly IFastRingBuffer _ringBuffer;
     private readonly RiskMemoryState _riskState;
     private readonly int _cpuCoreId;
 
@@ -29,7 +29,7 @@ public sealed class PreTradeRiskEngine : IDisposable
 
 
 
-    public PreTradeRiskEngine(IRingBuffer ringBuffer, RiskMemoryState riskState, int cpuCoreId, B3FixFastSender fixSender, OutboundRejectRingBuffer rejectBuffer)
+    public PreTradeRiskEngine(IFastRingBuffer ringBuffer, RiskMemoryState riskState, int cpuCoreId, B3FixFastSender fixSender, OutboundRejectRingBuffer rejectBuffer)
     {
         _fixSender = fixSender;
         _ringBuffer = ringBuffer;

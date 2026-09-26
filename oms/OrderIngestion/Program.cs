@@ -1,12 +1,8 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+﻿using FixSessionManager;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using ServiceDefaults;
 using ServiceDefaults.interfaces;
-using System;
-using Microsoft.Extensions.Configuration;
-using System.Threading;
-using System.Threading.Tasks;
-using FixSessionManager;
 
 public static class Program
 {
@@ -44,7 +40,7 @@ public static class Program
                     int core = 2;
                     var coreCfg = ctx.Configuration["Ingestion:Core"];
                     if (!string.IsNullOrEmpty(coreCfg) && int.TryParse(coreCfg, out var coreVal)) core = coreVal;
-                    return new OrderIngestionEngine(ip, port, core, (ServiceDefaults.interfaces.IRingBuffer)ring);
+                    return new OrderIngestionEngine(ip, port, core, (ServiceDefaults.interfaces.IFastRingBuffer)ring);
                 });
 
                 // Hosted services

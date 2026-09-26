@@ -1,4 +1,5 @@
-﻿using ServiceDefaults;
+﻿using OrderIngestion;
+using ServiceDefaults;
 using ServiceDefaults.events;
 using ServiceDefaults.interfaces;
 using System.Net;
@@ -12,7 +13,7 @@ public sealed class OrderIngestionEngine : IDisposable
     private readonly string _ipAddress;
     private readonly int _port;
     private readonly int _cpuCoreId;
-    private readonly IRingBuffer _ringBuffer;
+    private readonly IFastRingBuffer _ringBuffer;
 
     private Socket? _listenerSocket;
     private Socket? _clientSocket;
@@ -20,7 +21,7 @@ public sealed class OrderIngestionEngine : IDisposable
     private volatile bool _isRunning;
     private static readonly NativeSymbolMapper _symbolMapper = new NativeSymbolMapper();
 
-    public OrderIngestionEngine(string ipAddress, int port, int cpuCoreId, IRingBuffer ringBuffer)
+    public OrderIngestionEngine(string ipAddress, int port, int cpuCoreId, IFastRingBuffer ringBuffer)
     {
         _ipAddress = ipAddress;
         _port = port;
@@ -54,7 +55,8 @@ public sealed class OrderIngestionEngine : IDisposable
     private unsafe void RunIngestionLoop()
     {
         // 1. Thread Affinity (Fixa a thread em um núcleo físico exclusivo de CPU)
-        SetCpuAffinity(_cpuCoreId);
+        //SetCpuAffinity(_cpuCoreId);
+        ThreadAffinity.Set(_cpuCoreId);
 
         // 2. Alocação de buffer não gerenciado (Fora do GC)
         IntPtr nativeBufferPointer = (IntPtr)NativeMemory.Alloc(ReceiveBufferSize);
@@ -204,18 +206,6 @@ public sealed class OrderIngestionEngine : IDisposable
         catch
         {
             return 0; // Exceção, forçar desconexão
-        }
-    }
-
-    private static void SetCpuAffinity(int coreId)
-    {
-        if (OperatingSystem.IsLinux() || OperatingSystem.IsWindows())
-        {
-            var thread = System.Diagnostics.Process.GetCurrentProcess().Threads
-                .Cast<System.Diagnostics.ProcessThread>()
-                .First(t => t.Id == Environment.CurrentManagedThreadId);
-
-            thread.ProcessorAffinity = new IntPtr(1 << coreId);
         }
     }
 

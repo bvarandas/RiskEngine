@@ -1,5 +1,4 @@
 ﻿using ServiceDefaults;
-using System;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
@@ -11,8 +10,9 @@ public unsafe sealed class RiskMemoryState : IDisposable
     // Tabela contígua de Custódia: MaxAccounts x MaxSymbols
     // Indexação aritmética pura O(1)
     private readonly PositionState* _positions;
-    private const long MaxAccounts = 1_000_000;
-    private const int MaxSymbols = 256; // Suporta até 256 ativos no OMS (reduzido de 1024 para ~4 GB footprint)
+    private const long MaxAccounts = 200_000;
+    //private const int MaxSymbols = 256; // Suporta até 256 ativos no OMS (reduzido de 1024 para ~4 GB footprint)
+    private const int MaxSymbols = 2048;
 
     public RiskMemoryState()
     {
@@ -63,6 +63,37 @@ public unsafe sealed class RiskMemoryState : IDisposable
         long offset = (accountId * MaxSymbols) + symbolId;
         return ref _positions[offset];
     }
+    /// <summary>
+    /// Alimenta ou sobrescreve os limites de risco de uma conta usando a in-place copy da memória nativa.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public void LoadAccountState(in AccountRiskState state)
+    {
+        long accountId = state.AccountId;
+
+        if (accountId < 0 || accountId >= MaxAccounts)
+            throw new ArgumentOutOfRangeException(nameof(state.AccountId), $"ID {accountId} excede o limite {MaxAccounts}.");
+
+        // Cópia em bloco direta na memória unmanaged
+        _accounts[accountId] = state;
+    }
+    /// <summary>
+    /// Alimenta ou sobrescreve a posição de um ativo específico para uma conta.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public void LoadPositionState(long accountId, int symbolId, in PositionState state)
+    {
+        if (accountId < 0 || accountId >= MaxAccounts)
+            throw new ArgumentOutOfRangeException(nameof(accountId));
+
+        if (symbolId < 0 || symbolId >= MaxSymbols)
+            throw new ArgumentOutOfRangeException(nameof(symbolId));
+
+        long offset = (accountId * MaxSymbols) + symbolId;
+
+        // Cópia em bloco direta na memória unmanaged
+        _positions[offset] = state;
+    }
 
     private void Cleanup()
     {
@@ -76,65 +107,7 @@ public unsafe sealed class RiskMemoryState : IDisposable
         GC.SuppressFinalize(this);
     }
 
-    /// <summary>
-    /// Load accounts and positions using a repository implementation.
-    /// </summary>
-    public void LoadFromRepository<TRepository>(TRepository repository) 
-        where TRepository : class
-    {
-        if (repository == null) throw new ArgumentNullException(nameof(repository));
 
-        // Use reflection to call LoadAccounts and LoadPositions methods on the repository
-        var loadAccountsMethod = repository.GetType().GetMethod("LoadAccounts");
-        var loadPositionsMethod = repository.GetType().GetMethod("LoadPositions");
-
-        if (loadAccountsMethod == null || loadPositionsMethod == null)
-            throw new InvalidOperationException("Repository must implement LoadAccounts() and LoadPositions() methods");
-
-        // Load accounts
-        var accountsResult = loadAccountsMethod.Invoke(repository, null);
-        if (accountsResult is System.Collections.IList accountsList)
-        {
-            foreach (var acc in accountsList)
-            {
-                if (acc is AccountRiskState a)
-                {
-                    long id = a.AccountId;
-                    if (id < 0 || id >= MaxAccounts) continue;
-                    ref var slot = ref GetAccount(id);
-                    slot = a;
-                }
-            }
-        }
-
-        // Load positions
-        var positionsResult = loadPositionsMethod.Invoke(repository, null);
-        if (positionsResult is System.Collections.IList positionsList)
-        {
-            foreach (var pos in positionsList)
-            {
-                var tupleType = pos.GetType();
-                if (tupleType.IsGenericType && tupleType.GetGenericTypeDefinition() == typeof(ValueTuple<,,>))
-                {
-                    var accountIdProp = tupleType.GetProperty("Item1");
-                    var symbolIdProp = tupleType.GetProperty("Item2");
-                    var positionProp = tupleType.GetProperty("Item3");
-
-                    if (accountIdProp != null && symbolIdProp != null && positionProp != null)
-                    {
-                        var accountId = (long)accountIdProp.GetValue(pos)!;
-                        var symbolId = (int)symbolIdProp.GetValue(pos)!;
-                        var positionState = (PositionState)positionProp.GetValue(pos)!;
-
-                        if (accountId < 0 || accountId >= MaxAccounts) continue;
-                        if (symbolId < 0 || symbolId >= MaxSymbols) continue;
-                        ref var posSlot = ref GetPosition(accountId, symbolId);
-                        posSlot = positionState;
-                    }
-                }
-            }
-        }
-    }
 
     ~RiskMemoryState() => Cleanup();
 }
